@@ -1,0 +1,7 @@
+<form action="/edit_product/{{ id }}" method="post">
+    <input type="text" name="name" value="{{ name }}" placeholder="Product Name" /><br/>
+    <input type="text" name="price" value="{{ price }}" placeholder="Price" /><br/>
+    <input type="text" name="quantity" value="{{ quantity }}" placeholder="Quantity" /><br/>
+    <textarea name="description" placeholder="Description">{{ description }}</textarea><br/>
+    <button type="submit">Update Product</button>
+</form>
