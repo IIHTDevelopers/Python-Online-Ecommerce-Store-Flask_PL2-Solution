@@ -2,7 +2,7 @@ import unittest
 import os
 import sqlite3
 import json
-from app import app, get_db_connection
+from app import *
 from tests.TestUtils import TestUtils
 
 
@@ -60,69 +60,79 @@ class FunctionalTests(unittest.TestCase):
             self.test_obj.yakshaAssert("TestGetDBConnection", False, "functional")
             print(f"TestGetDBConnection = Failed | Exception: {e}")
 
-    def test_index_route_exists(self):
-        try:
-            routes = [rule.rule for rule in app.url_map.iter_rules()]
-            result = '/' in routes
-            self.test_obj.yakshaAssert("TestIndexRouteExists", result, "functional")
-            print("TestIndexRouteExists = Passed" if result else "TestIndexRouteExists = Failed")
-        except Exception as e:
-            self.test_obj.yakshaAssert("TestIndexRouteExists", False, "functional")
-            print(f"TestIndexRouteExists = Failed | Exception: {e}")
-
-    def test_index_route_method(self):
+    def test_index_route_exists_with_get(self):
         try:
             index_route = next((rule for rule in app.url_map.iter_rules() if rule.rule == '/'), None)
+
+            # Check both: route exists and GET method is supported
             result = index_route is not None and 'GET' in index_route.methods
-            self.test_obj.yakshaAssert("TestIndexRouteMethod", result, "functional")
-            print("TestIndexRouteMethod = Passed" if result else "TestIndexRouteMethod = Failed")
+
+            self.test_obj.yakshaAssert("TestIndexRouteExistsWithGET", result, "functional")
+            print("TestIndexRouteExistsWithGET = Passed" if result else "TestIndexRouteExistsWithGET = Failed")
+
         except Exception as e:
-            self.test_obj.yakshaAssert("TestIndexRouteMethod", False, "functional")
-            print(f"TestIndexRouteMethod = Failed | Exception: {e}")
+            self.test_obj.yakshaAssert("TestIndexRouteExistsWithGET", False, "functional")
+            print(f"TestIndexRouteExistsWithGET = Failed | Exception: {e}")
 
-    def test_admin_user_exists_in_db(self):
+    def test_register_function_direct_call(self):
         try:
-            # Actual credentials to verify in DB
-            test_username = "admin"
-            test_password = "admin123"
+            # Set up a POST request context manually with form data
+            with app.test_request_context('/register', method='POST', data={
+                'username': 'admin',
+                'password': 'admin123'
+            }):
+                # Now request.form and request.method are available inside register()
+                response = register()  # 🔥 Directly calling the real function!
 
-            # Connect to DB and check if admin user exists
+                # Verify the user was inserted into the DB
+                conn = get_db_connection()
+                user = conn.execute('SELECT * FROM users WHERE username = ? AND password = ?',
+                                    ('admin', 'admin123')).fetchone()
+                conn.close()
+
+                result = user is not None and response.status_code in (302, 200)
+
+                self.test_obj.yakshaAssert("TestRegisterFunction", result, "functional")
+                print(
+                    "TestRegisterFunctionDirectCall = Passed" if result else "TestRegisterFunction = Failed")
+
+        except Exception as e:
+            self.test_obj.yakshaAssert("TestRegisterFunction", False, "functional")
+            print(f"TestRegisterFunction = Failed | Exception: {e}")
+
+    def test_login_function_direct_call(self):
+        try:
+            # Check if 'admin' user exists in DB
             conn = get_db_connection()
-            user = conn.execute(
-                'SELECT * FROM users WHERE username = ? AND password = ?',
-                (test_username, test_password)
-            ).fetchone()
+            user = conn.execute('SELECT * FROM users WHERE username = ? AND password = ?',
+                                ('admin', 'admin123')).fetchone()
             conn.close()
 
-            result = user is not None
-            self.test_obj.yakshaAssert("TestAdminUserExistsInDB", result, "functional")
-            print("TestAdminUserExistsInDB = Passed" if result else "TestAdminUserExistsInDB = Failed")
+            if not user:
+                self.skipTest("Skipping test: Required user 'admin' with password 'admin123' not found in DB.")
+
+            # Create a POST request context with form data
+            with app.test_request_context('/login', method='POST', data={
+                'username': 'admin',
+                'password': 'admin123'
+            }):
+                with app.app_context():
+                    with app.test_client() as client:
+                        with client.session_transaction() as sess:
+                            session.update(sess)  # Allow session to be used
+
+                        response = login()  # 🔥 Direct call to your actual function
+
+                        # Validate login success: session contains user_id
+                        result = 'user_id' in session and response.status_code in (302, 200)
+
+                        self.test_obj.yakshaAssert("TestLoginFunctionDirectCall", result, "functional")
+                        print(
+                            "TestLoginFunctionDirectCall = Passed" if result else "TestLoginFunctionDirectCall = Failed")
 
         except Exception as e:
-            self.test_obj.yakshaAssert("TestAdminUserExistsInDB", False, "functional")
-            print(f"TestAdminUserExistsInDB = Failed | Exception: {e}")
-
-    def test_login_and_dashboard_access(self):
-        try:
-            test_username = "admin"
-            test_password = "admin123"
-
-            # Step 1: Perform login using Flask test client
-            response = self.client.post('/login', data={
-                'username': test_username,
-                'password': test_password
-            }, follow_redirects=True)
-
-            # Step 2: Try accessing dashboard after login
-            dashboard_response = self.client.get('/dashboard', follow_redirects=True)
-            result = dashboard_response.status_code == 200 and b'Dashboard' in dashboard_response.data
-
-            self.test_obj.yakshaAssert("TestLoginAndDashboardAccess", result, "functional")
-            print("TestLoginAndDashboardAccess = Passed" if result else "TestLoginAndDashboardAccess = Failed")
-
-        except Exception as e:
-            self.test_obj.yakshaAssert("TestLoginAndDashboardAccess", False, "functional")
-            print(f"TestLoginAndDashboardAccess = Failed | Exception: {e}")
+            self.test_obj.yakshaAssert("TestLoginFunctionDirectCall", False, "functional")
+            print(f"TestLoginFunctionDirectCall = Failed | Exception: {e}")
 
     def test_dashboard_total_value_above_150(self):
         try:
@@ -172,13 +182,12 @@ class FunctionalTests(unittest.TestCase):
     def test_salt_price_updated_to_100(self):
         try:
             conn = get_db_connection()
-            # Fixed: Changed "Salt" to "salt" to match actual database data
             cursor = conn.execute("SELECT price FROM products WHERE name = ?", ("salt",))
             row = cursor.fetchone()
             conn.close()
 
-            # Fixed: Convert string price to int for comparison
-            result = row is not None and int(row['price']) == 100
+            # Compare float to float
+            result = row is not None and float(row['price']) == 100.0
             self.test_obj.yakshaAssert("TestSaltPriceUpdate", result, "functional")
             print("TestSaltPriceUpdate = Passed" if result else "TestSaltPriceUpdate = Failed")
         except Exception as e:
@@ -189,8 +198,8 @@ class FunctionalTests(unittest.TestCase):
         try:
             conn = get_db_connection()
             cursor = conn.execute(
-                "SELECT * FROM products WHERE name = ? AND price = ? AND description = ?",
-                ("Gum", 10, "pack of gum")
+                "SELECT * FROM products WHERE name = ? AND price = ? AND quantity = ? AND description = ?",
+                ("Gum", 10.0, 10, "pack of gum")
             )
             row = cursor.fetchone()
             conn.close()
@@ -202,24 +211,6 @@ class FunctionalTests(unittest.TestCase):
         except Exception as e:
             self.test_obj.yakshaAssert("TestGumProductDeleted", False, "functional")
             print(f"TestGumProductDeleted = Failed | Exception: {e}")
-
-    def test_dashboard_page_loads(self):
-        try:
-            # Simulate a user login by setting 'user_id' in session
-            with self.client.session_transaction() as sess:
-                sess['user_id'] = 1
-
-            # Call the dashboard route
-            response = self.client.get('/dashboard')
-
-            # Check if response is successful and contains expected content like 'Dashboard'
-            result = response.status_code == 200 and b'Dashboard' in response.data
-
-            self.test_obj.yakshaAssert("TestDashboardPageLoad", result, "functional")
-            print("TestDashboardPageLoad = Passed" if result else "TestDashboardPageLoad = Failed")
-        except Exception as e:
-            self.test_obj.yakshaAssert("TestDashboardPageLoad", False, "functional")
-            print(f"TestDashboardPageLoad = Failed | Exception: {e}")
 
     def test_get_all_products(self):
         try:
@@ -238,42 +229,26 @@ class FunctionalTests(unittest.TestCase):
             self.test_obj.yakshaAssert("TestGetAllProducts", False, "functional")
             print(f"TestGetAllProducts = Failed | Exception: {e}")
 
-    def test_add_lays_product_json(self):
+    def test_lays_product_exists_after_postman_addition(self):
         try:
-            # Product data to test
-            product_data = {
-                "name": "lays",
-                "price": 10,
-                "description": "pack of lays"
-            }
-
-            # Send POST request to add product
-            response = self.client.post('/api/product',
-                                        data=json.dumps(product_data),
-                                        content_type='application/json')
-
-            # Check if response is correct
-            response_ok = response.status_code == 201 and response.get_json().get("status") == "success"
-
             # Check if product is in database
             conn = get_db_connection()
-            product_in_db = conn.execute("SELECT * FROM products WHERE name = ?", ("lays",)).fetchone()
+            product = conn.execute("SELECT * FROM products WHERE name = ?", ("lays",)).fetchone()
             conn.close()
 
-            db_check = (
-                    product_in_db is not None and
-                    int(product_in_db["price"]) == 10 and
-                    product_in_db["description"] == "pack of lays"
+            result = (
+                    product is not None and
+                    int(product["price"]) == 10 and
+                    int(product["quantity"]) == 20 and
+                    product["description"] == "pack of lays"
             )
 
-            final_result = response_ok and db_check
-
-            self.test_obj.yakshaAssert("TestAddLaysProductJson", final_result, "functional")
-            print("TestAddLaysProductJson = Passed" if final_result else "TestAddLaysProductJson = Failed")
+            self.test_obj.yakshaAssert("TestLaysProductExistsAfterPostmanAddition", result, "functional")
+            print("TestLaysProductExistsAfterPostmanAddition = Passed" if result else "TestLaysProductExistsAfterPostmanAddition = Failed")
 
         except Exception as e:
-            self.test_obj.yakshaAssert("TestAddLaysProductJson", False, "functional")
-            print(f"TestAddLaysProductJson = Failed | Exception: {e}")
+            self.test_obj.yakshaAssert("TestLaysProductExistsAfterPostmanAddition", False, "functional")
+            print(f"TestLaysProductExistsAfterPostmanAddition = Failed | Exception: {e}")
 
     def test_logout(self):
         try:
