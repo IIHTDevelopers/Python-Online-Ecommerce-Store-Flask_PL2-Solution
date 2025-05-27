@@ -95,15 +95,24 @@ def get_products():
     conn.close()
     return jsonify([dict(p) for p in products])
 
-@app.route('/api/product', methods=['POST'])
+@app.route('/api/products', methods=['POST'])
 def add_product_json():
     data = request.get_json()
+
+    # Basic input validation (optional but good practice)
+    if not all(key in data for key in ("name", "price", "quantity", "description")):
+        return jsonify({"error": "Missing one or more required fields"}), 400
+
     conn = get_db_connection()
-    conn.execute('INSERT INTO products (name, price, description) VALUES (?, ?, ?)',
-                 (data['name'], data['price'], data['description']))
-    conn.commit()
-    conn.close()
-    return jsonify({"status": "success"}), 201
+    try:
+        conn.execute('INSERT INTO products (name, price, quantity, description) VALUES (?, ?, ?, ?)',
+                     (data['name'], data['price'], data['quantity'], data['description']))
+        conn.commit()
+        return jsonify({"status": "success"}), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
 
 
 @app.route('/logout')
